@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"go/format"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/rand"
+	"os/exec"
 	"time"
 )
 
@@ -54,10 +56,24 @@ import (
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
+	for i := 0; ; i++ {
+		fmt.Println(i)
+
+		buf := generate()
+		ioutil.WriteFile("test.go", buf, 0666)
+		if err := exec.Command("go", "run", "test.go").Run(); err != nil {
+			log.Fatal("hm?", err)
+		}
+	}
+}
+
+func generate() []byte {
+	steps, panics = 0, 0
+
 	var m Multi
 	m.Body = []*Stmt{{Defer: true, Call: &Multi{Body: []*Stmt{{Call: &Unit{Kind: Recover}}}}}}
 
-	f := Fuzzer{budget: 10}
+	f := Fuzzer{budget: 100}
 	f.Fill(&m)
 
 	var a int
@@ -94,7 +110,7 @@ func step(want int) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(string(out))
+	return out
 }
 
 var steps, panics int
@@ -119,7 +135,9 @@ func Run(m *Multi, outer *int) int {
 				*outer = 0
 			}
 		case *Multi:
-			Run(c, panicp)
+			if n := Run(c, panicp); n != 0 {
+				panic = n
+			}
 		}
 	}
 
@@ -156,6 +174,9 @@ func Write(w io.Writer, m *Multi) {
 			case Panic:
 				fmt.Fprintf(w, "panic(%v)\n", call.N)
 			case Recover:
+				if stmt.Defer {
+					log.Fatal("defer of expect(recover()) doesnt make sense")
+				}
 				fmt.Fprintf(w, "expect(%v, recover())\n", call.N)
 			}
 
@@ -180,8 +201,8 @@ func (f *Fuzzer) Fill(m *Multi) {
 
 		var call interface{}
 		var waspanic bool
-		switch rand.Intn(4) {
-		case 0:
+		switch rand.Intn(10) {
+		case 0, 4, 5, 6:
 			b2 := rand.Intn(f.budget)
 			f.budget -= b2
 			m2 := new(Multi)
@@ -189,11 +210,15 @@ func (f *Fuzzer) Fill(m *Multi) {
 			f2.Fill(m2)
 			f.budget += f2.budget
 			call = m2
-		case 1:
+		case 2, 7, 8:
+			if !Defer {
+				call = &Unit{Kind: Recover, N: -1}
+				f.budget--
+				break
+			}
+			fallthrough
+		case 1, 9:
 			call = &Unit{Kind: Normal, N: -1}
-			f.budget--
-		case 2:
-			call = &Unit{Kind: Recover, N: -1}
 			f.budget--
 		case 3:
 			call = &Unit{Kind: Panic, N: -1}
